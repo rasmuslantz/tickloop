@@ -164,4 +164,61 @@ class RunOnMainAndOffloadTest {
         assertThat(cause).hasMessage("intentional");
     }
 
+    @Test
+    @Timeout(5)
+    void offload_failure_without_error_handler_is_reported_on_loop_thread() throws Exception {
+        AtomicReference<Throwable> reportedError = new AtomicReference<>();
+        AtomicReference<String> reportingThread = new AtomicReference<>();
+        AtomicReference<TickLoop> loopRef = new AtomicReference<>();
+        CountDownLatch errorReported = new CountDownLatch(1);
+
+        Thread.UncaughtExceptionHandler previousHandler =
+                Thread.getDefaultUncaughtExceptionHandler();
+
+        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+            reportingThread.set(thread.getName());
+            reportedError.set(error);
+            errorReported.countDown();
+        });
+
+        TickLoop loop = TickLoop.builder()
+                .tickPeriod(Duration.ofMillis(10))
+                .threadName("test-loop-no-error-handler")
+                .onTick(tick -> {
+                    if (tick == 0) {
+                        loopRef.get().<Integer>offload(() -> {
+                            throw new IllegalStateException("intentional failure");
+                        }).thenOnMain(value -> {
+                            // Success callback must not run.
+                        });
+                    }
+                })
+                .build();
+
+        loopRef.set(loop);
+
+        try {
+            loop.start();
+
+            assertThat(errorReported.await(2, TimeUnit.SECONDS))
+                    .as("failed offload should be reported through the loop thread")
+                    .isTrue();
+
+            Throwable error = reportedError.get();
+            assertThat(error)
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("offload work failed");
+
+            assertThat(error.getCause()).isNotNull();
+
+            assertThat(reportingThread.get())
+                    .isEqualTo("test-loop-no-error-handler");
+        } finally {
+            if (loop.isRunning()) {
+                loop.stop();
+            }
+            Thread.setDefaultUncaughtExceptionHandler(previousHandler);
+        }
+    }
+
 }
