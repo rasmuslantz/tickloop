@@ -4,6 +4,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -135,5 +138,59 @@ class BackpressureTest {
         assertThatThrownBy(() -> loop.createBoundedQueue(
                 "x", -5, BackpressureMode.DROP_NEWEST, v -> {}))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @Timeout(5)
+    void block_mode_interruption_returns_false_and_restores_interrupt_flag() throws Exception {
+        TickLoop loop = TickLoop.builder()
+                .onTick(tick -> {})
+                .build();
+
+        TickQueue<Integer> queue = loop.createBoundedQueue(
+                "events", 1, BackpressureMode.BLOCK, value -> {});
+
+        // Arrange: fill the queue without starting the loop.
+        assertThat(queue.offer(1)).isTrue();
+
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicBoolean offerResult = new AtomicBoolean(true);
+        AtomicBoolean interruptRestored = new AtomicBoolean(false);
+
+        Thread producer = new Thread(() -> {
+            started.countDown();
+            try {
+                offerResult.set(queue.offer(2));
+                interruptRestored.set(Thread.currentThread().isInterrupted());
+            } finally {
+                finished.countDown();
+            }
+        }, "blocked-producer");
+
+        producer.start();
+
+        try {
+            // Confirm the producer cannot complete while the queue is full.
+            assertThat(started.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(finished.await(100, TimeUnit.MILLISECONDS))
+                    .as("producer should wait while the BLOCK queue is full")
+                    .isFalse();
+
+            // Act: interrupt the blocked producer.
+            producer.interrupt();
+
+            // Assert: the documented interruption contract is respected.
+            assertThat(finished.await(2, TimeUnit.SECONDS))
+                    .as("interrupted producer should finish promptly")
+                    .isTrue();
+
+            assertThat(offerResult.get()).isFalse();
+            assertThat(interruptRestored.get()).isTrue();
+            assertThat(queue.size()).isEqualTo(1);
+        } finally {
+            producer.interrupt();
+            producer.join(2000);
+        }
     }
 }
