@@ -178,4 +178,45 @@ class TickLoopTest {
         loop.stop();
         assertThat(loop.isRunning()).isFalse();
     }
+
+    @Test
+    @Timeout(8)
+    void stop_returns_false_when_tick_exceeds_timeout() throws Exception {
+        CountDownLatch tickEntered = new CountDownLatch(1);
+        CountDownLatch releaseTick = new CountDownLatch(1);
+
+        TickLoop loop = TickLoop.builder()
+                .tickPeriod(Duration.ofMillis(10))
+                .onTick(tick -> {
+                    if (tick == 0) {
+                        tickEntered.countDown();
+                        releaseTick.await();
+                    }
+                })
+                .build();
+
+        // Arrange: start the loop and wait until its handler is blocked.
+        loop.start();
+
+        try {
+            assertThat(tickEntered.await(2, TimeUnit.SECONDS))
+                    .as("the first tick should start before stopping the loop")
+                    .isTrue();
+
+            // Act: request shutdown while the tick cannot finish.
+            boolean stopped = loop.stop(Duration.ofMillis(100));
+
+            // Assert: the loop could not terminate within the timeout.
+            assertThat(stopped)
+                    .as("stop should return false when the tick is still blocked")
+                    .isFalse();
+        } finally {
+            // Release the handler even if an assertion fails.
+            releaseTick.countDown();
+
+            assertThat(loop.stop(Duration.ofSeconds(2)))
+                    .as("the loop should terminate after releasing the handler")
+                    .isTrue();
+        }
+    }
 }
