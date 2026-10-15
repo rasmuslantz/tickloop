@@ -219,4 +219,60 @@ class TickLoopTest {
                     .isTrue();
         }
     }
+
+    @Test
+    @Timeout(5)
+    void exception_in_slow_tick_listener_does_not_kill_the_loop() throws Exception {
+        AtomicInteger tickCount = new AtomicInteger();
+        AtomicInteger listenerCalls = new AtomicInteger();
+        AtomicReference<Throwable> reportedException = new AtomicReference<>();
+
+        Thread.UncaughtExceptionHandler previousHandler =
+                Thread.getDefaultUncaughtExceptionHandler();
+
+        Thread.setDefaultUncaughtExceptionHandler((thread, exception) ->
+                reportedException.compareAndSet(null, exception));
+
+        TickLoop loop = TickLoop.builder()
+                .tickPeriod(Duration.ofMillis(10))
+                .slowTickThreshold(Duration.ofMillis(1))
+                .onTick(tick -> {
+                    tickCount.incrementAndGet();
+                    try {
+                        Thread.sleep(5);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException(e);
+                    }
+                })
+                .onSlowTick(stats -> {
+                    if (listenerCalls.incrementAndGet() == 1) {
+                        throw new RuntimeException("synthetic listener error");
+                    }
+                })
+                .build();
+
+        try {
+            loop.start();
+
+            long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+
+            while (tickCount.get() < 3 && System.nanoTime() < deadline) {
+                Thread.sleep(5);
+            }
+        } finally {
+            try {
+                assertThat(loop.stop()).isTrue();
+            } finally {
+                Thread.setDefaultUncaughtExceptionHandler(previousHandler);
+            }
+        }
+
+        assertThat(listenerCalls.get()).isGreaterThan(0);
+        assertThat(tickCount.get()).isGreaterThanOrEqualTo(3);
+
+        assertThat(reportedException.get())
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("synthetic listener error");
+    }
 }
