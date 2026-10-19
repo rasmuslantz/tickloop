@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -274,5 +276,41 @@ class TickLoopTest {
         assertThat(reportedException.get())
                 .isInstanceOf(RuntimeException.class)
                 .hasMessage("synthetic listener error");
+    }
+
+    @Test
+    @Timeout(5)
+    void reuses_initialized_offload_pool() throws Exception {
+        CountDownLatch completed = new CountDownLatch(2);
+        List<Integer> results = new CopyOnWriteArrayList<>();
+
+        TickLoop loop = TickLoop.builder()
+                .tickPeriod(Duration.ofMillis(10))
+                .onTick(tick -> {})
+                .build();
+
+        try {
+            loop.start();
+
+            loop.offload(() -> 1)
+                    .thenOnMain(value -> {
+                        results.add(value);
+                        completed.countDown();
+                    });
+
+            loop.offload(() -> 2)
+                    .thenOnMain(value -> {
+                        results.add(value);
+                        completed.countDown();
+                    });
+
+            assertThat(completed.await(2, TimeUnit.SECONDS))
+                    .as("both offloaded tasks should complete")
+                    .isTrue();
+
+            assertThat(results).containsExactlyInAnyOrder(1, 2);
+        } finally {
+            assertThat(loop.stop(Duration.ofSeconds(2))).isTrue();
+        }
     }
 }
