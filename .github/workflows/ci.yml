@@ -2,10 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, project/testing]
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [main, project/testing]
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -23,5 +26,45 @@ jobs:
           distribution: temurin
           java-version: ${{ matrix.java }}
           cache: maven
-      - name: Build
-        run: mvn -B -q verify
+      - name: Build and test
+        run: mvn -B --no-transfer-progress clean verify
+      - name: Summarize JaCoCo coverage
+        if: ${{ matrix.java == '21' && matrix.os == 'ubuntu-latest' }}
+        run: |
+          python3 - <<'PY'
+          import csv
+          import os
+          from pathlib import Path
+
+          path = Path('tickloop-core/target/site/jacoco/jacoco.csv')
+          with path.open(encoding='utf-8', newline='') as source:
+              rows = list(csv.DictReader(source))
+          if not rows:
+              raise SystemExit('JaCoCo CSV contains no class rows')
+
+          def percent(kind):
+              covered = sum(int(row[f'{kind}_COVERED']) for row in rows)
+              missed = sum(int(row[f'{kind}_MISSED']) for row in rows)
+              total = covered + missed
+              return f'{100 * covered / total:.1f}%' if total else 'N/A'
+
+          summary = (
+              '### tickloop-core JaCoCo coverage\n\n'
+              '| Metric | Coverage |\n| --- | ---: |\n'
+              f"| Instructions | {percent('INSTRUCTION')} |\n"
+              f"| Branches | {percent('BRANCH')} |\n"
+          )
+          print(summary)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as target:
+              target.write(summary)
+          PY
+      - name: Upload test and coverage evidence
+        if: ${{ matrix.java == '21' && matrix.os == 'ubuntu-latest' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tickloop-java21-ubuntu-evidence
+          path: |
+            tickloop-core/target/site/jacoco/
+            tickloop-core/target/surefire-reports/*.xml
+            tickloop-spring-boot-starter/target/surefire-reports/*.xml
+          if-no-files-found: error
