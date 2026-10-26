@@ -34,6 +34,16 @@ a Java app and stop reinventing.
 percentile histograms, bounded queues with backpressure, multi-rate groups,
 and a JMH benchmark module. See [CHANGELOG.md](CHANGELOG.md).
 
+## DV033G / HT26 testing project (Group 9)
+
+This fork's `project/testing` branch contains a risk-driven testing extension of **TickLoop 0.2.1** for Mid Sweden University's DV033G course. Five new regression tests focus on asynchronous errors, queue interruption, shutdown timeout, listener failure and repeated offload. The project did not modify production Java behaviour.
+
+- [Risk-to-test/oracle matrix](docs/testing-risk-oracles.md) — API expectations, tests, findings and limitations.
+- [Evidence and reproducibility index](docs/project-testing-evidence.md) — baseline/final counts, exact commits, recorded CI and commands.
+- [GitHub Actions for `project/testing`](https://github.com/rasmuslantz/tickloop/actions/workflows/ci.yml?query=branch%3Aproject%2Ftesting) — inspect the CI results of the revision actually submitted.
+
+Run `mvn clean verify` using Java 21 or 23 to reproduce the full suite. The recorded extension has 58 tests overall (53 core + five Spring starter). Test outcomes are scoped evidence, not proof of all possible concurrent schedules.
+
 ## Install
 
 ### JitPack (recommended for now)
